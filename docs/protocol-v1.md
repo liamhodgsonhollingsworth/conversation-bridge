@@ -1,3 +1,12 @@
+---
+schema-version: 1
+name: conversation-bridge-protocol
+description: HTTP protocol for relaying captured conversations from the bridge extension to user-configured endpoints. Three endpoints (/spec, /health, /events) define the contract; any project hosting a compatible endpoint participates.
+filed-by: maintainer-directive-2026-05-28 (claude.ai prompt 002 Item F + Item D extension implementation)
+applies-to: every conversation-bridge endpoint implementation
+versioning-discipline: https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md
+---
+
 # Conversation Bridge Protocol (CBP) v1
 
 A minimal open protocol for receiving conversation captures from the
@@ -6,6 +15,8 @@ that wants to relay conversations from a webpage to a user-configured
 endpoint with a transparency-based trust handshake.
 
 This document is the source of truth. The current protocol version is **1**.
+The `schema-version` field in the frontmatter above is stamped per the
+network-wide [tool-versioning discipline](https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md).
 
 ---
 
@@ -168,8 +179,30 @@ This document specifies version **1**. Future versions will be additive
 where possible. Endpoints SHOULD include their supported version in
 `/spec`'s top-level fields if and when v2 ships.
 
+Versioning follows the network-wide [tool-versioning discipline](https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md).
+The discipline's Line 4 rule applies: an LLM that could parse v(N) must be
+able to parse v(N+1). Field renames and payload-shape changes within the
+same envelope (POST /events, GET /spec, GET /health) typically preserve
+LLM-parseability and stay v1; structural changes (new envelope, removed
+primary endpoint) trigger v2. The `schema-version` frontmatter field and
+the `## Changelog` section at the foot of this document are the live
+instance of the discipline applied to this protocol.
+
 ## 8. Minimal endpoint example
 
 A Python implementation in ~80 lines lives at
 [`examples/python-server/server.py`](../examples/python-server/server.py).
 Anyone can use it directly or as a starting point for their own endpoint.
+
+## Changelog
+
+- **v1, 2026-05-28** — Initial protocol filed alongside the conversation-bridge MVP. Schema-version stamp added per the tool-versioning discipline at https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md.
+
+Per the discipline's Line 5 ("Backward compatibility is defined as: any
+session that could parse the previous version can parse the new version.
+Since the parser is an LLM and the medium is text, this is self-enforcing
+by construction"), future protocol updates bump `schema-version` only if
+an LLM that could parse v(N) cannot parse v(N+1). Field renames and
+payload-shape changes within the same envelope (POST /events, GET /spec,
+GET /health) typically preserve LLM-parseability and stay v1; structural
+changes (new envelope, removed primary endpoint) trigger v2.
