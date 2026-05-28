@@ -1,0 +1,9 @@
+node_modules/
+.wxt/
+.output/
+.DS_Store
+*.log
+stats.html
+stats-firefox.html
+.env.local
+.env.*.local
