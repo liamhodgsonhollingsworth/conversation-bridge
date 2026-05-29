@@ -1,3 +1,12 @@
+---
+schema-version: 2
+title: AGENTS.md — Conversation Bridge
+type: agent-entry-point
+worldline_tier: realized
+time_position: '2026-05-28T12:00:00Z'
+applies-to: every AI agent (Claude Code, Cursor, Aider, OpenAI SDK, future agents) entering this repo
+---
+
 # AGENTS.md — Conversation Bridge
 
 This file is the vendor-neutral agent-discoverable entry point for the Conversation Bridge project. Any AI agent (Claude, GPT, open-source models, future agents) reads this file at the start of any session in this repo to orient itself in the project's conventions, capabilities, and current state.
@@ -23,7 +32,7 @@ The repo contains:
 | **Apeiron** | `C:/Users/Liam/Desktop/Apeiron/` | github.com/liamhodgsonhollingsworth/Apeiron | Node-graph engine; multi-renderer substrate |
 | **Resonance Wavefront (meta-layer)** | `C:/Users/Liam/Desktop/Resonance/` | github.com/liamhodgsonhollingsworth/The-Resonance-Wavefront | Conventions + ideas graph |
 | **Resonance Website** | `C:/Users/Liam/Desktop/Resonance-Website/` | github.com/liamhodgsonhollingsworth/Resonance-Website | Immersive science-fiction website |
-| **Resonance Hub** | — | github.com/liamhodgsonhollingsworth/Resonance-Hub | Open-edit collaborator entry point |
+| **Resonance Hub** | `C:/Users/Liam/Desktop/Resonance-Hub/` | github.com/liamhodgsonhollingsworth/Resonance-Hub | Open-edit collaborator entry point |
 
 The conversation-bridge repo is the only one designed to live as a standalone protocol — receiving endpoints can be anywhere. The other repos in the network are end-to-end consumers of bridge events for the Resonance system.
 
@@ -38,6 +47,7 @@ The conversation-bridge repo is the only one designed to live as a standalone pr
 | Extension shared lib (types, storage, protocol client, extractors) | `extension/src/lib/` |
 | Reference Python endpoint | `examples/python-server/` |
 | Build/install commands for the extension | `extension/README.md` + `extension/package.json` |
+| Tool-versioning discipline (this file follows it) | `https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md` |
 
 ## What conventions every agent inherits
 
@@ -48,6 +58,7 @@ The conversation-bridge repo is the only one designed to live as a standalone pr
 - **Project-agnostic protocol**: nothing in CBP v1 is specific to claude.ai, Alethea, WeaveMind, or any other downstream. Any project can host a compatible endpoint. Agents adding content-script extractors for new sites (ChatGPT, Gemini, etc.) follow the model in `extension/src/entrypoints/claude-ai.content.ts` and add the host pattern to `wxt.config.ts` `host_permissions`.
 - **Heuristic + replaceable extraction**: the claude.ai content script walks DOM + watches for completion heuristics. If the DOM changes, the script falls back to walking `<article>` elements. Future agents improving extraction submit PRs against the entrypoint files.
 - **GitHub operations are session-handled**: agents do their own `gh` operations (PR creation, merge, branch delete).
+- **AGENTS.md follows the tool-versioning discipline**: this file carries `schema-version` frontmatter + a `## Changelog` section at the foot, exemplifying the same discipline the CBP protocol spec follows.
 
 ## How to contribute as an agent
 
@@ -89,5 +100,10 @@ MIT. See [LICENSE](LICENSE). Differs from sibling repos in the Resonance network
 - The federation protocol extension on CBP v1 is designed (in the Alethea ideas graph) but not implemented
 - Content-script extractors for ChatGPT, Gemini, and other LLM webapps are open implementation tasks
 - The trust-tier-extended endpoint discovery (auto-publishing endpoints to a directory) is sketched in the network's ideas graph
+
+## Changelog
+
+- v1, 2026-05-28, initial vendor-neutral agent-discoverability surface; cross-vendor mirror of `CLAUDE.md` for any AI agent stack entering this repo. Filed during foundation arc F5.
+- v2, 2026-05-28, added `schema-version: 2` frontmatter (file already referenced the discipline in convention bullet 1 but did not itself carry the field) + this Changelog section per the [tool-versioning discipline](https://github.com/liamhodgsonhollingsworth/Alethea/blob/main/skills/versioning-discipline.md); added tool-versioning row to "Where to find what"; added a bullet to "What conventions every agent inherits" naming that AGENTS.md itself follows the discipline. Backward-compatible per Line 4 (additive). Filed during the cross-repo AGENTS.md sync audit (SPEC-471).
 
 This file is an evolving idea; agents that find gaps should propose extensions via PRs.
