@@ -17,6 +17,21 @@ endpoint and become a destination.
 - **A reference Python server** that writes received events to a local
   inbox directory.
 
+## Status
+
+Early MVP (extension version `0.1.0`, protocol CBP v1). What works today:
+
+- The browser extension (background relay, popup with the three views,
+  on-page toast) builds and sideloads on Chromium and Firefox.
+- One built-in content-script extractor ships: **claude.ai** only. Other
+  sites (ChatGPT, Gemini, …) are open contribution tasks — see
+  [Adding support for other sites](#adding-support-for-other-sites).
+- The reference Python endpoint implements all three CBP routes, plus
+  optional bearer-token auth and optional HMAC signing.
+
+Known rough edges: the optional HMAC signing path has not been exercised
+end-to-end in production yet.
+
 ## What it is not
 
 - Not a SaaS. There is no cloud you sign up for.
@@ -97,7 +112,8 @@ The extension ships with a content script for `claude.ai/*` that:
 - Walks the page DOM and extracts messages + roles + title + URL.
 - Watches for "conversation completion" heuristics:
   - User just sent a message containing an approval keyword
-    (`approve`, `approved`, `rejected`, `go ahead`, `ship it`, `lgtm`, etc.)
+    (`approve`, `approved`, `reject`, `rejected`, `deny`, `go ahead`,
+    `ship it`, `lgtm`)
   - URL switched to a `/share/...` page
 - Fires `conversation.complete` or `conversation.captured` events
   accordingly. Connections that subscribe to those event types receive
