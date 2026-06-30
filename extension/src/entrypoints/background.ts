@@ -6,6 +6,7 @@
 
 import {
   getConnections,
+  addConnection,
   updateConnection,
   appendLog,
   getSettings,
@@ -22,6 +23,12 @@ const CLAUDEAI_SYNC_INITIAL_ALARM = 'claudeai-sync-initial';
 
 export default defineBackground(() => {
   console.log('[ConversationBridge] background worker started', { id: browser.runtime.id });
+
+  // Self-hosted convenience: a build that sets VITE_SEED_LOOPBACK ships with the
+  // user's own loopback receiver pre-trusted, so they don't hand-add a connection
+  // to their own machine. INERT in the public default build (no flag → no seed →
+  // the trust-first handshake still governs every connection). See seedLoopbackConnection.
+  void seedLoopbackConnection();
 
   browser.alarms.create('health-poll', { periodInMinutes: HEALTH_POLL_PERIOD_MIN });
 
@@ -76,6 +83,44 @@ export default defineBackground(() => {
     return false;
   });
 });
+
+// Pre-seed a single loopback connection so a self-hosted build works on first load
+// without the user hand-adding a connection to their OWN machine. Gated behind the
+// build-time flag VITE_SEED_LOOPBACK (a URL, default http://127.0.0.1:8782 when set
+// to a truthy non-URL): with no flag this is a no-op, so the PUBLIC extension default
+// keeps the trust-first handshake for every connection. Never overrides an existing
+// connection list, so it can't clobber what the user set up themselves.
+async function seedLoopbackConnection(): Promise<void> {
+  const flag = (import.meta.env as Record<string, string | undefined>).VITE_SEED_LOOPBACK;
+  if (!flag) return;
+  try {
+    const existing = await getConnections();
+    if (existing.length > 0) return; // never override the user's own connections
+    const endpointUrl = flag.startsWith('http') ? flag : 'http://127.0.0.1:8782';
+    const now = new Date().toISOString();
+    await addConnection({
+      id: uuid(),
+      name: 'Wavelet (loopback)',
+      endpointUrl,
+      scopes: [{ pattern: 'claude.ai/*', description: 'Your claude.ai conversations' }],
+      events: ['conversation.captured', 'conversation.complete'],
+      trustAcceptance: {
+        acceptedAt: now,
+        dataFlowSummary:
+          'Pre-seeded loopback receiver on your own machine (self-hosted build). Captures relay to ' +
+          endpointUrl +
+          ' over localhost only.',
+        version: 1,
+      },
+      enabled: true,
+      createdAt: now,
+      totalEventsRelayed: 0,
+    });
+    console.log('[ConversationBridge] seeded loopback connection ->', endpointUrl);
+  } catch (e) {
+    console.warn('[ConversationBridge] loopback seed skipped:', e);
+  }
+}
 
 async function handleManualPush(): Promise<
   { ok: true; relayed: number } | { ok: false; error: string }
