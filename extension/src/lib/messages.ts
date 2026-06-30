@@ -11,6 +11,7 @@ export type ExtensionMessage =
       sourceUrl: string;
       payload: BridgeEventPayload;
     }
+  | { type: 'SYNC_CLAUDEAI_NOW' }
   | { type: 'SHOW_TOAST'; toast: ToastData };
 
 export interface ToastData {

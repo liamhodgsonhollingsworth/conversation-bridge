@@ -96,9 +96,15 @@ export interface ExtensionSettings {
   enabled: boolean;
   /** If true, redact message content (only metadata + counts relayed). */
   privacyMode: boolean;
+  /** If true, the background poller syncs claude.ai conversations automatically. */
+  claudeAiSyncEnabled: boolean;
+  /** How often (minutes) the claude.ai background poll runs. */
+  claudeAiSyncPeriodMin: number;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,
   privacyMode: false,
+  claudeAiSyncEnabled: true,
+  claudeAiSyncPeriodMin: 30,
 };

@@ -13,16 +13,36 @@ import {
 import { postEvent, fetchHealth, urlMatchesScopes } from '../lib/protocol';
 import { type BridgeEventPayload, type EventType } from '../lib/types';
 import { type ExtensionMessage, type ToastData } from '../lib/messages';
+import { pollClaudeAiConversations, type PollResult } from '../lib/claude-sync';
 import { uuid } from '../lib/uuid';
 
 const HEALTH_POLL_PERIOD_MIN = 5;
+const CLAUDEAI_SYNC_ALARM = 'claudeai-sync';
+const CLAUDEAI_SYNC_INITIAL_ALARM = 'claudeai-sync-initial';
 
 export default defineBackground(() => {
   console.log('[ConversationBridge] background worker started', { id: browser.runtime.id });
 
   browser.alarms.create('health-poll', { periodInMinutes: HEALTH_POLL_PERIOD_MIN });
+
+  // Schedule the recurring claude.ai sync from settings, plus a one-shot poll
+  // shortly after startup so the first sync doesn't wait a full period.
+  getSettings()
+    .then((s) => {
+      browser.alarms.create(CLAUDEAI_SYNC_ALARM, {
+        periodInMinutes: Math.max(1, s.claudeAiSyncPeriodMin),
+      });
+    })
+    .catch(() => {
+      browser.alarms.create(CLAUDEAI_SYNC_ALARM, { periodInMinutes: 30 });
+    });
+  browser.alarms.create(CLAUDEAI_SYNC_INITIAL_ALARM, { delayInMinutes: 0.5 });
+
   browser.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'health-poll') await pollAllHealth();
+    else if (alarm.name === CLAUDEAI_SYNC_ALARM || alarm.name === CLAUDEAI_SYNC_INITIAL_ALARM) {
+      await runClaudeAiSync();
+    }
   });
 
   browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
@@ -45,6 +65,12 @@ export default defineBackground(() => {
       testConnection(msg.connectionId)
         .then(r => sendResponse(r))
         .catch(e => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg.type === 'SYNC_CLAUDEAI_NOW') {
+      runClaudeAiSync()
+        .then(r => sendResponse({ ok: !r.error, ...r }))
+        .catch(e => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
       return true;
     }
     return false;
@@ -104,6 +130,50 @@ async function handleContentEvent(
     settings.privacyMode,
   );
   return { ok: true, relayed };
+}
+
+/**
+ * Run one claude.ai background sync cycle. Gated on both the master kill switch
+ * and the per-feature claudeAiSyncEnabled flag. Relays each changed
+ * conversation as a `conversation.captured` event through the existing
+ * fan-out, then appends a counts-only summary to the relay log.
+ */
+async function runClaudeAiSync(): Promise<PollResult> {
+  const settings = await getSettings();
+  if (!settings.enabled || !settings.claudeAiSyncEnabled) {
+    return { scanned: 0, relayed: 0, skipped: 0, error: 'disabled' };
+  }
+
+  const result = await pollClaudeAiConversations(async (sourceUrl, payload) => {
+    await relayToMatchingConnections(
+      'conversation.captured',
+      sourceUrl,
+      payload,
+      settings.privacyMode,
+    );
+  });
+
+  // Counts-only log entry. Never include message bodies, cookies, or tokens.
+  await appendLog({
+    id: uuid(),
+    connectionId: 'claudeai-sync',
+    connectionName: 'claude.ai auto-sync',
+    eventType: 'conversation.captured',
+    endpointUrl: 'internal:claude.ai',
+    timestamp: new Date().toISOString(),
+    status: result.error ? 'error' : 'success',
+    detail: result.error
+      ? `sync error: ${result.error}`
+      : `scanned ${result.scanned}, relayed ${result.relayed}, skipped ${result.skipped}`,
+  });
+
+  console.log('[ConversationBridge] claude.ai sync', {
+    scanned: result.scanned,
+    relayed: result.relayed,
+    skipped: result.skipped,
+    error: result.error,
+  });
+  return result;
 }
 
 async function relayToMatchingConnections(

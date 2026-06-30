@@ -123,6 +123,73 @@ The extraction logic is intentionally heuristic + replaceable. If
 claude.ai's DOM changes, the script falls back to walking `<article>`
 elements. PRs improving extraction are welcome.
 
+## Automatic claude.ai sync (internal-API poller)
+
+In addition to the on-page content script above, the extension runs a
+**background poller** that automatically syncs *all* of your claude.ai
+conversations with zero ongoing work.
+
+claude.ai has no official conversation API, but its logged-in web app
+calls an internal JSON API. Because the extension runs inside your
+already-authenticated browser, its background `fetch()` calls ride your
+**existing session cookies** (`credentials: 'include'`) — there are no
+credentials, tokens, or API keys to enter, anywhere. If you are not logged
+in to claude.ai, a poll cycle simply aborts quietly.
+
+How it works:
+
+- A `claudeai-sync` alarm fires every **30 minutes** (configurable via the
+  `claudeAiSyncPeriodMin` setting), plus once shortly after the worker
+  starts so the first sync doesn't wait a full period.
+- Each cycle resolves your organization, lists your conversations
+  (paginated), and **incrementally dedups**: a per-chat map of the last
+  synced `updated_at` lives in `browser.storage.local`. Only conversations
+  that are new or have a newer `updated_at` get their full message tree
+  fetched and relayed. Unchanged conversations are skipped entirely, so the
+  steady-state cost is ~one cheap list call.
+- Each changed conversation is relayed as a CBP v1 **`conversation.captured`**
+  event through the same fan-out as the content script — it flows to every
+  enabled connection subscribed to `conversation.captured` whose scopes match
+  `claude.ai/*`. The protocol is **not** bumped; this reuses the existing
+  event type.
+- Privacy mode and the master enable switch both apply. The feature has its
+  own toggle (**Settings → Auto-sync claude.ai**, on by default). Logs are
+  counts-only — no message bodies, cookies, or tokens are ever written.
+
+You can also trigger an immediate sync programmatically by sending the
+background worker a `{ type: 'SYNC_CLAUDEAI_NOW' }` runtime message (a
+"Sync now" button is a natural addition to the popup).
+
+### Assumed internal-API shape (and how to confirm it)
+
+claude.ai's internal API is **undocumented**, so the poller's field mapping is
+based on the observed/known response shapes below rather than a published
+contract. The parser is deliberately **lenient** — it accepts both `snake_case`
+and `camelCase` keys, tolerates `uuid` or `id`, and silently skips missing
+fields — so a quiet rename degrades gracefully (a field drops out) instead of
+breaking the sync. The three endpoints and the fields the poller reads:
+
+| Endpoint | Reads | Tolerates |
+|---|---|---|
+| `GET /api/organizations` | org `uuid`, `capabilities[]` (prefers one containing `"chat"`) | `id`; wrapped `{organizations\|data\|results: [...]}` |
+| `GET /api/organizations/{org}/chat_conversations?limit&offset` | per-conversation `uuid`, `updated_at` | `id`; `updatedAt`; wrapped `{conversations\|data\|results}` |
+| `…/chat_conversations/{id}?tree=True&rendering_mode=messages` | `uuid`, `name`, `created_at`, `updated_at`, `model`, `chat_messages[]` (each `sender` ∈ `human`/`assistant`, `text` or `content[].text`, `created_at`) | `id`, `title`, `createdAt`/`updatedAt`, `chatMessages`/`messages`, message `role`, per-message `createdAt`/`timestamp` |
+
+If the list endpoint ever **ignores `offset`** and returns the same page on
+every request, pagination still terminates: the poller dedups by conversation id
+as it collects and stops the moment a page introduces no new ids (with a hard
+`MAX_LIST_PAGES` cap as a backstop).
+
+**To confirm the field names against your real account (no credentials, no
+login needed beyond your normal browser session):** while logged in to
+claude.ai, open DevTools → **Network**, filter for `chat_conversations`, click
+any request, and inspect the **Response** JSON. Check that conversations carry
+`uuid` + `updated_at` and that a `…?tree=True` response carries `chat_messages`
+with `sender`/`text`. If any of those names differ on your account, note the
+real names — the parser already tolerates the common variants, but unknown names
+should be added to the pickers in
+[`extension/src/lib/claude-sync.ts`](extension/src/lib/claude-sync.ts).
+
 ## Adding support for other sites
 
 The content-script pattern is the model. To add `chat.openai.com/*` or
