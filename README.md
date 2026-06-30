@@ -123,6 +123,43 @@ The extraction logic is intentionally heuristic + replaceable. If
 claude.ai's DOM changes, the script falls back to walking `<article>`
 elements. PRs improving extraction are welcome.
 
+## Automatic claude.ai sync (internal-API poller)
+
+In addition to the on-page content script above, the extension runs a
+**background poller** that automatically syncs *all* of your claude.ai
+conversations with zero ongoing work.
+
+claude.ai has no official conversation API, but its logged-in web app
+calls an internal JSON API. Because the extension runs inside your
+already-authenticated browser, its background `fetch()` calls ride your
+**existing session cookies** (`credentials: 'include'`) — there are no
+credentials, tokens, or API keys to enter, anywhere. If you are not logged
+in to claude.ai, a poll cycle simply aborts quietly.
+
+How it works:
+
+- A `claudeai-sync` alarm fires every **30 minutes** (configurable via the
+  `claudeAiSyncPeriodMin` setting), plus once shortly after the worker
+  starts so the first sync doesn't wait a full period.
+- Each cycle resolves your organization, lists your conversations
+  (paginated), and **incrementally dedups**: a per-chat map of the last
+  synced `updated_at` lives in `browser.storage.local`. Only conversations
+  that are new or have a newer `updated_at` get their full message tree
+  fetched and relayed. Unchanged conversations are skipped entirely, so the
+  steady-state cost is ~one cheap list call.
+- Each changed conversation is relayed as a CBP v1 **`conversation.captured`**
+  event through the same fan-out as the content script — it flows to every
+  enabled connection subscribed to `conversation.captured` whose scopes match
+  `claude.ai/*`. The protocol is **not** bumped; this reuses the existing
+  event type.
+- Privacy mode and the master enable switch both apply. The feature has its
+  own toggle (**Settings → Auto-sync claude.ai**, on by default). Logs are
+  counts-only — no message bodies, cookies, or tokens are ever written.
+
+You can also trigger an immediate sync programmatically by sending the
+background worker a `{ type: 'SYNC_CLAUDEAI_NOW' }` runtime message (a
+"Sync now" button is a natural addition to the popup).
+
 ## Adding support for other sites
 
 The content-script pattern is the model. To add `chat.openai.com/*` or
