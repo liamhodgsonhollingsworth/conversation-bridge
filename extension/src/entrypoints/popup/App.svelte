@@ -29,7 +29,12 @@
   let activeTab = $state<Tab>('connections');
   let connections = $state<Connection[]>([]);
   let log = $state<RelayLogEntry[]>([]);
-  let settings = $state<ExtensionSettings>({ enabled: true, privacyMode: false });
+  let settings = $state<ExtensionSettings>({
+    enabled: true,
+    privacyMode: false,
+    claudeAiSyncEnabled: true,
+    claudeAiSyncPeriodMin: 30,
+  });
   let busy = $state(false);
   let error = $state<string | null>(null);
   let info = $state<string | null>(null);
@@ -168,6 +173,11 @@
   async function togglePrivacy(): Promise<void> {
     settings = { ...settings, privacyMode: !settings.privacyMode };
     await setSettings({ privacyMode: settings.privacyMode });
+  }
+
+  async function toggleClaudeAiSync(): Promise<void> {
+    settings = { ...settings, claudeAiSyncEnabled: !settings.claudeAiSyncEnabled };
+    await setSettings({ claudeAiSyncEnabled: settings.claudeAiSyncEnabled });
   }
 
   async function clearAllLog(): Promise<void> {
@@ -382,6 +392,20 @@
           </div>
           <label class="switch">
             <input type="checkbox" checked={settings.privacyMode} onchange={togglePrivacy} />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <span class="label">Auto-sync claude.ai</span>
+            <p class="hint">
+              Poll your claude.ai conversations in the background (every
+              {settings.claudeAiSyncPeriodMin} min) using your existing session.
+              Relays new/updated chats as conversation.captured events.
+            </p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" checked={settings.claudeAiSyncEnabled} onchange={toggleClaudeAiSync} />
             <span class="slider"></span>
           </label>
         </div>
