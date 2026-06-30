@@ -20,6 +20,11 @@ import { type BridgeEventPayload } from './types';
 
 const CLAUDE_ORIGIN = 'https://claude.ai';
 const LIST_PAGE_LIMIT = 30;
+// Hard cap on list pages per cycle. 200 * 30 = 6000 conversations — far past any
+// real account — so an internal API that silently IGNORES `offset` (and returns
+// the same first page forever) can never spin this loop. The per-page
+// "no new ids" check below is the primary guard; this is the belt-and-braces cap.
+const MAX_LIST_PAGES = 200;
 const FETCH_TIMEOUT_MS = 15000;
 const SYNC_STATE_KEY = 'cb.claudeai.syncState';
 
@@ -77,36 +82,32 @@ export function pickOrgId(orgsJson: unknown): string | null {
  */
 export function normalizeConversation(treeJson: unknown): BridgeEventPayload {
   const tree = (treeJson ?? {}) as Record<string, unknown>;
-  const chatId = String(tree.uuid ?? '');
-  const rawMessages = Array.isArray(tree.chat_messages)
-    ? (tree.chat_messages as unknown[])
-    : [];
+  const chatId = pickStr(tree, 'uuid', 'id') ?? '';
+  const rawMessages = pickArray(tree, 'chat_messages', 'chatMessages', 'messages');
 
   const messages = rawMessages.map((m) => {
     const msg = (m ?? {}) as Record<string, unknown>;
-    const role = mapSenderToRole(msg.sender);
+    // claude.ai labels the author `sender` ('human'|'assistant'); tolerate a
+    // `role` field too in case the shape drifts toward the public-API naming.
+    const role = mapSenderToRole(msg.sender ?? msg.role);
     return {
       role,
       content: extractMessageText(msg),
-      timestamp:
-        typeof msg.created_at === 'string' ? (msg.created_at as string) : undefined,
+      timestamp: pickStr(msg, 'created_at', 'createdAt', 'timestamp'),
     };
   });
 
-  const model =
-    typeof tree.model === 'string' && tree.model.length > 0
-      ? (tree.model as string)
-      : undefined;
+  const model = pickStr(tree, 'model');
 
   const payload: BridgeEventPayload = {
     messages,
-    title: typeof tree.name === 'string' ? (tree.name as string) : undefined,
+    title: pickStr(tree, 'name', 'title'),
     url: `${CLAUDE_ORIGIN}/chat/${chatId}`,
     shareUrl: null,
     chatId,
     source: 'claude.ai',
-    createdAt: typeof tree.created_at === 'string' ? (tree.created_at as string) : undefined,
-    updatedAt: typeof tree.updated_at === 'string' ? (tree.updated_at as string) : undefined,
+    createdAt: pickStr(tree, 'created_at', 'createdAt'),
+    updatedAt: pickStr(tree, 'updated_at', 'updatedAt'),
     model,
   };
   return payload;
@@ -125,15 +126,15 @@ export function selectChangedChatIds(
 ): string[] {
   const out: string[] = [];
   for (const item of listItems) {
-    const chatId = item?.uuid;
-    if (!chatId || typeof chatId !== 'string') continue;
+    const chatId = convId(item);
+    if (!chatId) continue;
     const stored = syncState[chatId];
-    const listed = item.updated_at;
+    const listed = pickStr(item as unknown as Record<string, unknown>, 'updated_at', 'updatedAt');
     if (stored === undefined) {
       out.push(chatId);
       continue;
     }
-    if (typeof listed === 'string' && isNewer(listed, stored)) {
+    if (listed !== undefined && isNewer(listed, stored)) {
       out.push(chatId);
     }
   }
@@ -181,9 +182,14 @@ export async function pollClaudeAiConversations(
     return { scanned, relayed, skipped, error: 'no_org' };
   }
 
-  // 2. Paginate the conversation list.
+  // 2. Paginate the conversation list. Dedup by id as we collect, and stop as
+  //    soon as a page introduces no NEW ids — this is what makes the loop safe
+  //    against an internal API that silently ignores `offset` and returns the
+  //    same first page on every request (which would otherwise loop forever).
+  //    MAX_LIST_PAGES is the belt-and-braces hard cap.
   const listItems: ConversationListItem[] = [];
-  for (let offset = 0; ; offset += LIST_PAGE_LIMIT) {
+  const seenIds = new Set<string>();
+  for (let offset = 0, pages = 0; pages < MAX_LIST_PAGES; offset += LIST_PAGE_LIMIT, pages++) {
     const path = `/api/organizations/${orgId}/chat_conversations?limit=${LIST_PAGE_LIMIT}&offset=${offset}`;
     const pageRes = await apiGet(path);
     if (!pageRes.ok) {
@@ -191,20 +197,31 @@ export async function pollClaudeAiConversations(
       return { scanned, relayed, skipped, error: pageRes.error };
     }
     const page = asArray(pageRes.json, ['conversations', 'data', 'results']) as ConversationListItem[];
-    listItems.push(...page);
+    const beforeUnique = seenIds.size;
+    for (const it of page) {
+      const id = convId(it);
+      if (id === undefined) continue; // id-less rows can't be deduped or synced
+      if (seenIds.has(id)) continue; // already collected (offset ignored / overlap)
+      seenIds.add(id);
+      listItems.push(it);
+    }
     scanned = listItems.length;
     if (page.length < LIST_PAGE_LIMIT) break; // short/empty page = last page
+    if (seenIds.size === beforeUnique) break; // no new ids this page -> stop
   }
 
-  // 3. Diff against the dedup map.
+  // 3. Diff against the dedup map. (listItems now holds only id-bearing rows.)
   const syncState = await loadSyncState();
   const changed = selectChangedChatIds(listItems, syncState);
-  skipped = listItems.filter((i) => typeof i.uuid === 'string').length - changed.length;
+  skipped = listItems.length - changed.length;
   if (skipped < 0) skipped = 0;
 
   // Index list items by id so we have a fallback `updated_at` to persist.
   const listedById = new Map<string, ConversationListItem>();
-  for (const i of listItems) if (typeof i.uuid === 'string') listedById.set(i.uuid, i);
+  for (const i of listItems) {
+    const id = convId(i);
+    if (id !== undefined) listedById.set(id, i);
+  }
 
   // 4. Fetch each changed tree and relay it.
   for (const chatId of changed) {
@@ -225,9 +242,10 @@ export async function pollClaudeAiConversations(
       continue;
     }
     // Persist the freshest `updated_at` we know about for this chat.
+    const listed = listedById.get(chatId);
     const marker =
-      (typeof payload.updatedAt === 'string' && payload.updatedAt) ||
-      listedById.get(chatId)?.updated_at ||
+      payload.updatedAt ||
+      (listed && pickStr(listed as unknown as Record<string, unknown>, 'updated_at', 'updatedAt')) ||
       new Date().toISOString();
     syncState[chatId] = marker;
   }
@@ -292,6 +310,33 @@ async function saveSyncState(state: SyncState): Promise<void> {
 // ---------------------------------------------------------------------------
 // Small shared pure utilities
 // ---------------------------------------------------------------------------
+
+/**
+ * First present non-empty string among the given keys. Tolerates the API
+ * returning snake_case OR camelCase (e.g. `updated_at` vs `updatedAt`) and
+ * simply skips keys that are missing or non-string.
+ */
+function pickStr(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+/** First present array among the given keys (snake_case/camelCase tolerant). */
+function pickArray(obj: Record<string, unknown>, ...keys: string[]): unknown[] {
+  for (const k of keys) {
+    const v = obj[k];
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+/** The conversation id from a list item, tolerating `uuid` or `id`. */
+function convId(item: ConversationListItem): string | undefined {
+  return pickStr(item as unknown as Record<string, unknown>, 'uuid', 'id');
+}
 
 /** Coerce a possibly-wrapped JSON value into an array of items. */
 function asArray(json: unknown, wrapperKeys: string[]): unknown[] {

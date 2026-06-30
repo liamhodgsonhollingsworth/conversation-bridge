@@ -166,6 +166,51 @@ describe('normalizeConversation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// normalizeConversation — drift resilience (snake_case OR camelCase, id/role
+// fallbacks). The live internal API is snake_case today; these guard against a
+// silent rename so a drift degrades gracefully instead of dropping fields.
+// ---------------------------------------------------------------------------
+
+describe('normalizeConversation drift tolerance', () => {
+  it('reads camelCase tree + message fields', () => {
+    const camel = {
+      id: 'chat-camel',
+      title: 'CamelCased tree',
+      createdAt: '2026-06-02T10:00:00Z',
+      updatedAt: '2026-06-20T12:30:00Z',
+      model: 'claude-opus-4-8',
+      chatMessages: [
+        { role: 'user', text: 'hi', createdAt: '2026-06-02T10:00:01Z' },
+        { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      ],
+    };
+    const p = normalizeConversation(camel);
+    expect(p.chatId).toBe('chat-camel');
+    expect(p.url).toBe('https://claude.ai/chat/chat-camel');
+    expect(p.title).toBe('CamelCased tree');
+    expect(p.createdAt).toBe('2026-06-02T10:00:00Z');
+    expect(p.updatedAt).toBe('2026-06-20T12:30:00Z');
+    expect(p.model).toBe('claude-opus-4-8');
+    expect(p.messages?.[0].role).toBe('user');
+    expect(p.messages?.[0].content).toBe('hi');
+    expect(p.messages?.[0].timestamp).toBe('2026-06-02T10:00:01Z');
+    expect(p.messages?.[1].role).toBe('assistant');
+    expect(p.messages?.[1].content).toBe('hello');
+  });
+
+  it('maps role=user/assistant when no sender field is present', () => {
+    const p = normalizeConversation({
+      uuid: 'r',
+      messages: [
+        { role: 'user', text: 'q' },
+        { role: 'assistant', text: 'a' },
+      ],
+    });
+    expect(p.messages?.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // selectChangedChatIds
 // ---------------------------------------------------------------------------
 
@@ -207,5 +252,19 @@ describe('selectChangedChatIds', () => {
   it('treats a seen item with no updated_at as unchanged', () => {
     const list: ConversationListItem[] = [{ uuid: 'chat-x' }];
     expect(selectChangedChatIds(list, { 'chat-x': '2026-06-01T00:00:00Z' })).toEqual([]);
+  });
+
+  it('tolerates camelCase updatedAt and id on list items', () => {
+    const list = [
+      // id (not uuid) + camelCase updatedAt, newer than stored -> changed
+      { id: 'chat-camel', updatedAt: '2026-06-20T12:30:00Z' } as unknown as ConversationListItem,
+      // uuid + camelCase updatedAt, unchanged
+      { uuid: 'chat-snake', updatedAt: '2026-06-10T10:00:00Z' } as unknown as ConversationListItem,
+    ];
+    const changed = selectChangedChatIds(list, {
+      'chat-camel': '2026-06-15T00:00:00Z',
+      'chat-snake': '2026-06-10T10:00:00Z',
+    });
+    expect(changed).toEqual(['chat-camel']);
   });
 });
